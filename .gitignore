@@ -1,0 +1,27 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Databases / raw research data
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs / runtime
+*.log
+autonomous_lab_v2_logs/
+backups/
+archive_before_v4_*/
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local sockets/runtime
+*.sock
+.research_writer.sock

@@ -1,0 +1,67 @@
+{
+  "boundary_id": 1049,
+  "constraints": {
+    "future_swaps_allowed": false,
+    "interaction_search": false,
+    "model_refitting": false,
+    "t59_modified": false,
+    "threshold_optimization": false
+  },
+  "created_at": 1786742252.369192,
+  "definitions": {
+    "buyer_velocity_10": "unique buyer arrivals in final 10 seconds / 10",
+    "buyer_velocity_direction": "LOWER => RUN-like",
+    "buyer_window_seconds": 30.0,
+    "early_div": "early_price_return - early_net_sol"
+  },
+  "experiment": "T78_CAPV2_BUYERVEL10_PROSPECTIVE",
+  "freeze_sha256": "741e5f14ced8b194dc3951085d71b48f6f1100639243ef31f764d64d89214ba3",
+  "historical_source": "T77",
+  "model": {
+    "coefficients": {
+      "breadth_score": -0.1515540253215279,
+      "buyer_velocity_10": -0.5087326021234615,
+      "early_div": -0.4515979780534501,
+      "fa": 0.0031483701506290714,
+      "late_chase_score": 0.007366799312321981,
+      "new_wallets30": 0.06081582224475871,
+      "recent_buy_share": -0.5002956936357325,
+      "recent_net_share": 0.6183692253895903
+    },
+    "features": [
+      "fa",
+      "new_wallets30",
+      "recent_buy_share",
+      "recent_net_share",
+      "breadth_score",
+      "late_chase_score",
+      "early_div",
+      "buyer_velocity_10"
+    ],
+    "intercept": -0.39902815727009566,
+    "name": "M3_CAPV2_BUYERVEL10"
+  },
+  "standardization": {
+    "means": {
+      "breadth_score": 0.8937922443625443,
+      "buyer_velocity_10": 0.1467741935483871,
+      "early_div": -1.2903575681095678,
+      "fa": 0.2706161312983871,
+      "late_chase_score": 0.6635622212444809,
+      "new_wallets30": 4.387096774193548,
+      "recent_buy_share": 0.396151192090759,
+      "recent_net_share": 0.09202832556355285
+    },
+    "source": "T77_TRAIN_ONLY",
+    "stds": {
+      "breadth_score": 0.6330871664086611,
+      "buyer_velocity_10": 0.11460696079671301,
+      "early_div": 20.017149812385068,
+      "fa": 0.207957136024741,
+      "late_chase_score": 0.3611234458670888,
+      "new_wallets30": 2.6479135956427267,
+      "recent_buy_share": 0.21471996463291348,
+      "recent_net_share": 0.4110133608483303
+    }
+  }
+}

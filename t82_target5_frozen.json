@@ -1,0 +1,24 @@
+{
+  "boundary_id": 1198,
+  "constraints": {
+    "historical_rows_allowed": false,
+    "model_refitting": false,
+    "modify_t59": false,
+    "modify_t78": false,
+    "threshold_optimization": false
+  },
+  "created_at": 1786747443.343381,
+  "experiment": "T82_TARGET5_PROSPECTIVE",
+  "freeze_sha256": "583ee359c26ee2fbb8903ad44246d715de21a7f3b2ce31ddb771351cef2b16f6",
+  "purpose": "Independent prospective target-density experiment",
+  "reference_models": {
+    "t59": "CAP-v2",
+    "t78": "CAP-v2 + buyer_velocity_10"
+  },
+  "target": {
+    "dump_threshold": -5.0,
+    "horizon_seconds": 60,
+    "neutral_definition": "-5 < dex_return_60s < +5",
+    "runner_threshold": 5.0
+  }
+}

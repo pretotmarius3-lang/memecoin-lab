@@ -1,0 +1,450 @@
+====================================================================================================================================================================================
+MEMECOIN LAB — T63 SEQUENCE WINDOW DEFINITION AUDIT
+====================================================================================================================================================================================
+FILE  : event_sequence_v340.py
+LINES : 958
+
+NO OUTCOME LABELS / NO MODEL / NO DB WRITE
+
+====================================================================================================================================================================================
+A) FUNCTIONS
+====================================================================================================================================================================================
+   17 | def valid(x):
+   25 | def med(vals):
+   30 | def percentile(vals, p):
+   46 | def safe_div(a,b):
+   52 | def fmt(x):
+   58 | def connect():
+  164 | def last_swaps(token, ts):
+  190 | def block_stats(rows):
+  295 | def build_event(event):
+  579 | def load_analysis():
+  603 | def separation(rows):
+
+====================================================================================================================================================================================
+B) PRICE-RETURN FEATURE REFERENCES
+====================================================================================================================================================================================
+
+--- lines 114-144 ---
+      114 |     early_sell_concentration REAL,
+      115 |     mid_sell_concentration REAL,
+      116 |     recent_sell_concentration REAL,
+      117 | 
+      118 |     early_median_buy REAL,
+      119 |     mid_median_buy REAL,
+      120 |     recent_median_buy REAL,
+      121 | 
+      122 |     early_median_sell REAL,
+      123 |     mid_median_sell REAL,
+      124 |     recent_median_sell REAL,
+      125 | 
+>>>   126 |     early_price_return REAL,
+      127 |     mid_price_return REAL,
+      128 |     recent_price_return REAL,
+      129 | 
+      130 |     early_duration REAL,
+      131 |     mid_duration REAL,
+      132 |     recent_duration REAL,
+      133 | 
+      134 |     early_swaps_per_sec REAL,
+      135 |     mid_swaps_per_sec REAL,
+      136 |     recent_swaps_per_sec REAL,
+      137 | 
+      138 |     buy_count_trend REAL,
+      139 |     buy_sol_trend REAL,
+      140 |     net_sol_trend REAL,
+      141 |     buyer_diversity_trend REAL,
+      142 |     buy_concentration_trend REAL,
+      143 |     frequency_trend REAL,
+      144 | 
+
+--- lines 115-145 ---
+      115 |     mid_sell_concentration REAL,
+      116 |     recent_sell_concentration REAL,
+      117 | 
+      118 |     early_median_buy REAL,
+      119 |     mid_median_buy REAL,
+      120 |     recent_median_buy REAL,
+      121 | 
+      122 |     early_median_sell REAL,
+      123 |     mid_median_sell REAL,
+      124 |     recent_median_sell REAL,
+      125 | 
+      126 |     early_price_return REAL,
+>>>   127 |     mid_price_return REAL,
+      128 |     recent_price_return REAL,
+      129 | 
+      130 |     early_duration REAL,
+      131 |     mid_duration REAL,
+      132 |     recent_duration REAL,
+      133 | 
+      134 |     early_swaps_per_sec REAL,
+      135 |     mid_swaps_per_sec REAL,
+      136 |     recent_swaps_per_sec REAL,
+      137 | 
+      138 |     buy_count_trend REAL,
+      139 |     buy_sol_trend REAL,
+      140 |     net_sol_trend REAL,
+      141 |     buyer_diversity_trend REAL,
+      142 |     buy_concentration_trend REAL,
+      143 |     frequency_trend REAL,
+      144 | 
+      145 |     recent_buy_share REAL,
+
+--- lines 116-146 ---
+      116 |     recent_sell_concentration REAL,
+      117 | 
+      118 |     early_median_buy REAL,
+      119 |     mid_median_buy REAL,
+      120 |     recent_median_buy REAL,
+      121 | 
+      122 |     early_median_sell REAL,
+      123 |     mid_median_sell REAL,
+      124 |     recent_median_sell REAL,
+      125 | 
+      126 |     early_price_return REAL,
+      127 |     mid_price_return REAL,
+>>>   128 |     recent_price_return REAL,
+      129 | 
+      130 |     early_duration REAL,
+      131 |     mid_duration REAL,
+      132 |     recent_duration REAL,
+      133 | 
+      134 |     early_swaps_per_sec REAL,
+      135 |     mid_swaps_per_sec REAL,
+      136 |     recent_swaps_per_sec REAL,
+      137 | 
+      138 |     buy_count_trend REAL,
+      139 |     buy_sol_trend REAL,
+      140 |     net_sol_trend REAL,
+      141 |     buyer_diversity_trend REAL,
+      142 |     buy_concentration_trend REAL,
+      143 |     frequency_trend REAL,
+      144 | 
+      145 |     recent_buy_share REAL,
+      146 |     recent_net_share REAL,
+
+--- lines 541-571 ---
+      541 |     "early_unique_buyers",
+      542 |     "mid_unique_buyers",
+      543 |     "recent_unique_buyers",
+      544 | 
+      545 |     "early_unique_sellers",
+      546 |     "mid_unique_sellers",
+      547 |     "recent_unique_sellers",
+      548 | 
+      549 |     "early_buy_concentration",
+      550 |     "mid_buy_concentration",
+      551 |     "recent_buy_concentration",
+      552 | 
+>>>   553 |     "early_price_return",
+      554 |     "mid_price_return",
+      555 |     "recent_price_return",
+      556 | 
+      557 |     "early_swaps_per_sec",
+      558 |     "mid_swaps_per_sec",
+      559 |     "recent_swaps_per_sec",
+      560 | 
+      561 |     "buy_count_trend",
+      562 |     "buy_sol_trend",
+      563 |     "net_sol_trend",
+      564 | 
+      565 |     "buyer_diversity_trend",
+      566 |     "buy_concentration_trend",
+      567 |     "frequency_trend",
+      568 | 
+      569 |     "recent_buy_share",
+      570 |     "recent_net_share",
+      571 | 
+
+--- lines 542-572 ---
+      542 |     "mid_unique_buyers",
+      543 |     "recent_unique_buyers",
+      544 | 
+      545 |     "early_unique_sellers",
+      546 |     "mid_unique_sellers",
+      547 |     "recent_unique_sellers",
+      548 | 
+      549 |     "early_buy_concentration",
+      550 |     "mid_buy_concentration",
+      551 |     "recent_buy_concentration",
+      552 | 
+      553 |     "early_price_return",
+>>>   554 |     "mid_price_return",
+      555 |     "recent_price_return",
+      556 | 
+      557 |     "early_swaps_per_sec",
+      558 |     "mid_swaps_per_sec",
+      559 |     "recent_swaps_per_sec",
+      560 | 
+      561 |     "buy_count_trend",
+      562 |     "buy_sol_trend",
+      563 |     "net_sol_trend",
+      564 | 
+      565 |     "buyer_diversity_trend",
+      566 |     "buy_concentration_trend",
+      567 |     "frequency_trend",
+      568 | 
+      569 |     "recent_buy_share",
+      570 |     "recent_net_share",
+      571 | 
+      572 |     "price_response_recent",
+
+--- lines 543-573 ---
+      543 |     "recent_unique_buyers",
+      544 | 
+      545 |     "early_unique_sellers",
+      546 |     "mid_unique_sellers",
+      547 |     "recent_unique_sellers",
+      548 | 
+      549 |     "early_buy_concentration",
+      550 |     "mid_buy_concentration",
+      551 |     "recent_buy_concentration",
+      552 | 
+      553 |     "early_price_return",
+      554 |     "mid_price_return",
+>>>   555 |     "recent_price_return",
+      556 | 
+      557 |     "early_swaps_per_sec",
+      558 |     "mid_swaps_per_sec",
+      559 |     "recent_swaps_per_sec",
+      560 | 
+      561 |     "buy_count_trend",
+      562 |     "buy_sol_trend",
+      563 |     "net_sol_trend",
+      564 | 
+      565 |     "buyer_diversity_trend",
+      566 |     "buy_concentration_trend",
+      567 |     "frequency_trend",
+      568 | 
+      569 |     "recent_buy_share",
+      570 |     "recent_net_share",
+      571 | 
+      572 |     "price_response_recent",
+      573 | 
+
+====================================================================================================================================================================================
+C) EARLY / MID / RECENT WINDOW CONSTRUCTION
+====================================================================================================================================================================================
+  130 |     early_duration REAL,
+  131 |     mid_duration REAL,
+  132 |     recent_duration REAL,
+  476 |         early["duration"],
+  477 |         mid["duration"],
+  478 |         recent["duration"],
+
+====================================================================================================================================================================================
+D) SWAP QUERY / TEMPORAL FILTERING
+====================================================================================================================================================================================
+
+--- lines 166-186 ---
+  166 |     return db.execute("""
+  167 |         SELECT
+  168 |             timestamp,
+  169 |             wallet,
+  170 |             side,
+  171 |             ABS(sol_delta) AS sol,
+  172 |             clean_price
+  173 | 
+  174 |         FROM swaps
+  175 | 
+  176 |         WHERE
+  177 |             token_mint=?
+  178 |             AND price_valid=1
+  179 |             AND timestamp < ?
+  180 | 
+  181 |         ORDER BY timestamp DESC
+  182 |         LIMIT ?
+  183 |     """, (
+  184 |         token,
+  185 |         ts,
+  186 |         N_SWAPS
+
+--- lines 171-191 ---
+  171 |             ABS(sol_delta) AS sol,
+  172 |             clean_price
+  173 | 
+  174 |         FROM swaps
+  175 | 
+  176 |         WHERE
+  177 |             token_mint=?
+  178 |             AND price_valid=1
+  179 |             AND timestamp < ?
+  180 | 
+  181 |         ORDER BY timestamp DESC
+  182 |         LIMIT ?
+  183 |     """, (
+  184 |         token,
+  185 |         ts,
+  186 |         N_SWAPS
+  187 |     )).fetchall()[::-1]
+  188 | 
+  189 | 
+  190 | def block_stats(rows):
+  191 | 
+
+--- lines 701-721 ---
+  701 | 
+  702 |             FROM events
+  703 |             ORDER BY id
+  704 |         """).fetchall()
+  705 | 
+  706 |         existing = {
+  707 |             r["event_id"]
+  708 |             for r in db.execute("""
+  709 |                 SELECT event_id
+  710 |                 FROM event_sequence_features_v340
+  711 |             """).fetchall()
+  712 |         }
+  713 | 
+  714 |         pending = [
+  715 |             e for e in events
+  716 |             if e["id"] not in existing
+  717 |         ]
+  718 | 
+  719 |         built = 0
+  720 |         skipped = 0
+  721 | 
+
+====================================================================================================================================================================================
+E) UPDATED_AT REFERENCES
+====================================================================================================================================================================================
+
+--- lines 145-163 ---
+      145 |     recent_buy_share REAL,
+      146 |     recent_net_share REAL,
+      147 | 
+      148 |     price_response_recent REAL,
+      149 | 
+      150 |     late_chase_score REAL,
+      151 |     breadth_score REAL,
+      152 | 
+>>>   153 |     updated_at REAL
+      154 | );
+      155 | """)
+      156 | 
+      157 | db.commit()
+      158 | 
+      159 | 
+      160 | # ============================================================
+      161 | # LAST SWAPS BEFORE EVENT
+      162 | # ============================================================
+      163 | 
+
+====================================================================================================================================================================================
+F) FUTURE-LOOKING PATTERN SCAN
+====================================================================================================================================================================================
+  499 | PATTERN=time\.time\(                        |         time.time(),
+
+====================================================================================================================================================================================
+G) PRICE SOURCE REFERENCES
+====================================================================================================================================================================================
+  172 |             clean_price
+  233 |         r["clean_price"]
+  235 |         if valid(r["clean_price"])
+  236 |         and r["clean_price"] > 0
+
+====================================================================================================================================================================================
+H) COMPACT RELEVANT EXTRACT
+====================================================================================================================================================================================
+   78 |     event_timestamp REAL,
+   82 |     early_buy_count INTEGER,
+   83 |     mid_buy_count INTEGER,
+   84 |     recent_buy_count INTEGER,
+   86 |     early_sell_count INTEGER,
+   87 |     mid_sell_count INTEGER,
+   88 |     recent_sell_count INTEGER,
+   90 |     early_buy_sol REAL,
+   91 |     mid_buy_sol REAL,
+   92 |     recent_buy_sol REAL,
+   94 |     early_sell_sol REAL,
+   95 |     mid_sell_sol REAL,
+   96 |     recent_sell_sol REAL,
+   98 |     early_net_sol REAL,
+   99 |     mid_net_sol REAL,
+  100 |     recent_net_sol REAL,
+  102 |     early_unique_buyers INTEGER,
+  103 |     mid_unique_buyers INTEGER,
+  104 |     recent_unique_buyers INTEGER,
+  106 |     early_unique_sellers INTEGER,
+  107 |     mid_unique_sellers INTEGER,
+  108 |     recent_unique_sellers INTEGER,
+  110 |     early_buy_concentration REAL,
+  111 |     mid_buy_concentration REAL,
+  112 |     recent_buy_concentration REAL,
+  114 |     early_sell_concentration REAL,
+  115 |     mid_sell_concentration REAL,
+  116 |     recent_sell_concentration REAL,
+  118 |     early_median_buy REAL,
+  119 |     mid_median_buy REAL,
+  120 |     recent_median_buy REAL,
+  122 |     early_median_sell REAL,
+  123 |     mid_median_sell REAL,
+  124 |     recent_median_sell REAL,
+  126 |     early_price_return REAL,
+  127 |     mid_price_return REAL,
+  128 |     recent_price_return REAL,
+  130 |     early_duration REAL,
+  131 |     mid_duration REAL,
+  132 |     recent_duration REAL,
+  134 |     early_swaps_per_sec REAL,
+  135 |     mid_swaps_per_sec REAL,
+  136 |     recent_swaps_per_sec REAL,
+  145 |     recent_buy_share REAL,
+  146 |     recent_net_share REAL,
+  153 |     updated_at REAL
+  172 |             clean_price
+  174 |         FROM swaps
+  233 |         r["clean_price"]
+  235 |         if valid(r["clean_price"])
+  236 |         and r["clean_price"] > 0
+  363 |     recent_buy_share = (
+  378 |     recent_net_share = (
+  402 |     if valid(recent_buy_share):
+  404 |             recent_buy_share
+  491 |         recent_buy_share,
+  492 |         recent_net_share,
+  521 |     "early_buy_count",
+  522 |     "mid_buy_count",
+  523 |     "recent_buy_count",
+  525 |     "early_sell_count",
+  526 |     "mid_sell_count",
+  527 |     "recent_sell_count",
+  529 |     "early_buy_sol",
+  530 |     "mid_buy_sol",
+  531 |     "recent_buy_sol",
+  533 |     "early_sell_sol",
+  534 |     "mid_sell_sol",
+  535 |     "recent_sell_sol",
+  537 |     "early_net_sol",
+  538 |     "mid_net_sol",
+  539 |     "recent_net_sol",
+  541 |     "early_unique_buyers",
+  542 |     "mid_unique_buyers",
+  543 |     "recent_unique_buyers",
+  545 |     "early_unique_sellers",
+  546 |     "mid_unique_sellers",
+  547 |     "recent_unique_sellers",
+  549 |     "early_buy_concentration",
+  550 |     "mid_buy_concentration",
+  551 |     "recent_buy_concentration",
+  553 |     "early_price_return",
+  554 |     "mid_price_return",
+  555 |     "recent_price_return",
+  557 |     "early_swaps_per_sec",
+  558 |     "mid_swaps_per_sec",
+  559 |     "recent_swaps_per_sec",
+  569 |     "recent_buy_share",
+  570 |     "recent_net_share",
+  890 |             "recent_buy_share",
+
+====================================================================================================================================================================================
+I) WHAT TO CHECK MANUALLY
+====================================================================================================================================================================================
+1. Exact temporal ranges assigned to EARLY / MID / RECENT.
+2. Whether every swap used satisfies swap.timestamp <= event_timestamp.
+3. Exact formula used for each *_price_return.
+4. Whether updated_at is only write-time metadata or affects feature inputs.
+5. Whether the sequence engine is recomputed later using swaps that arrived after the event.
+
+T63 writes nothing and uses no outcome labels.

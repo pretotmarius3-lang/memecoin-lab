@@ -1,0 +1,777 @@
+#!/usr/bin/env python3
+
+import asyncio
+import json
+import os
+import sqlite3
+import time
+import urllib.request
+import urllib.error
+
+import websockets
+from dotenv import load_dotenv
+
+load_dotenv(".env")
+
+DB = "validation_v090.db"
+
+TABLE = "t101_migrations"
+
+PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+PUMPSWAP_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+
+WS_URL = os.getenv("SOLANA_WS_URL")
+
+# Try common HTTP RPC variable names first.
+RPC_URL = (
+    os.getenv("SOLANA_RPC_URL")
+    or os.getenv("SOLANA_HTTP_URL")
+    or os.getenv("HELIUS_RPC_URL")
+    or os.getenv("RPC_URL")
+)
+
+# If only the websocket URL exists, Helius/Solana RPC endpoints
+# commonly use the same host/query over HTTPS.
+if not RPC_URL and WS_URL:
+    if WS_URL.startswith("wss://"):
+        RPC_URL = "https://" + WS_URL[len("wss://"):]
+    elif WS_URL.startswith("ws://"):
+        RPC_URL = "http://" + WS_URL[len("ws://"):]
+
+
+# ------------------------------------------------------------
+# DB
+# ------------------------------------------------------------
+
+db = sqlite3.connect(
+    DB,
+    timeout=30
+)
+
+db.row_factory = sqlite3.Row
+db.execute("PRAGMA busy_timeout=5000")
+
+db.execute(f"""
+CREATE TABLE IF NOT EXISTS {TABLE} (
+
+    signature TEXT PRIMARY KEY,
+
+    detected_at REAL NOT NULL,
+    block_time REAL,
+    slot INTEGER,
+
+    token_mint TEXT,
+
+    pump_program TEXT NOT NULL,
+    pumpswap_program TEXT,
+
+    migrate_v2 INTEGER NOT NULL DEFAULT 0,
+    create_pool INTEGER NOT NULL DEFAULT 0,
+
+    confirmed INTEGER NOT NULL DEFAULT 0,
+
+    pool_address TEXT,
+
+    account_keys_json TEXT,
+    candidate_mints_json TEXT,
+
+    status TEXT NOT NULL,
+    error TEXT
+)
+""")
+
+db.commit()
+
+
+# ------------------------------------------------------------
+# RPC
+# ------------------------------------------------------------
+
+def rpc_call(method, params):
+
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    }).encode()
+
+    req = urllib.request.Request(
+        RPC_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+
+    with urllib.request.urlopen(
+        req,
+        timeout=20
+    ) as response:
+
+        body = response.read()
+
+    data = json.loads(body)
+
+    if "error" in data:
+        raise RuntimeError(
+            f"RPC {method} error: {data['error']}"
+        )
+
+    return data.get("result")
+
+
+def get_transaction(signature):
+
+    # Transaction can briefly be unavailable just after processed logs.
+    for attempt in range(10):
+
+        try:
+
+            result = rpc_call(
+                "getTransaction",
+                [
+                    signature,
+                    {
+                        "commitment": "confirmed",
+                        "encoding": "jsonParsed",
+                        "maxSupportedTransactionVersion": 0,
+                    }
+                ]
+            )
+
+            if result is not None:
+                return result
+
+        except Exception as exc:
+
+            if attempt == 9:
+                raise
+
+        time.sleep(1.0)
+
+    return None
+
+
+# ------------------------------------------------------------
+# TX PARSING
+# ------------------------------------------------------------
+
+KNOWN_NON_MEME_MINTS = {
+    # Wrapped SOL
+    "So11111111111111111111111111111111111111112",
+
+    # Native/system placeholders should never be selected as mint.
+    "11111111111111111111111111111111",
+}
+
+
+def extract_account_keys(tx):
+
+    try:
+        keys = tx[
+            "transaction"
+        ][
+            "message"
+        ][
+            "accountKeys"
+        ]
+    except Exception:
+        return []
+
+    out = []
+
+    for key in keys:
+
+        if isinstance(key, str):
+            out.append(key)
+
+        elif isinstance(key, dict):
+
+            pubkey = key.get("pubkey")
+
+            if pubkey:
+                out.append(pubkey)
+
+    return out
+
+
+def extract_candidate_mints(tx):
+
+    meta = tx.get("meta") or {}
+
+    balances = []
+
+    balances.extend(
+        meta.get("preTokenBalances")
+        or []
+    )
+
+    balances.extend(
+        meta.get("postTokenBalances")
+        or []
+    )
+
+    seen = []
+
+    for item in balances:
+
+        mint = item.get("mint")
+
+        if (
+            mint
+            and mint not in KNOWN_NON_MEME_MINTS
+            and mint not in seen
+        ):
+            seen.append(mint)
+
+    return seen
+
+
+def tx_logs(tx):
+
+    meta = tx.get("meta") or {}
+
+    return (
+        meta.get("logMessages")
+        or []
+    )
+
+
+def contains_exact_migrate_v2(logs):
+
+    return any(
+        str(x).strip()
+        == "Program log: Instruction: MigrateV2"
+        for x in logs
+    )
+
+
+def contains_create_pool(logs):
+
+    return any(
+        str(x).strip()
+        == "Program log: Instruction: CreatePool"
+        for x in logs
+    )
+
+
+def choose_token_mint(candidate_mints):
+
+    # In most SOL-paired migrations there should be one non-WSOL mint.
+    if len(candidate_mints) == 1:
+        return candidate_mints[0]
+
+    # Don't guess if there are several possibilities.
+    return None
+
+
+# ------------------------------------------------------------
+# STORAGE
+# ------------------------------------------------------------
+
+def save_detection(
+    signature,
+    slot,
+):
+
+    db.execute(f"""
+    INSERT OR IGNORE INTO {TABLE} (
+        signature,
+        detected_at,
+        slot,
+        pump_program,
+        migrate_v2,
+        status
+    )
+    VALUES (
+        ?, ?, ?,
+        ?, 1,
+        'DETECTED'
+    )
+    """, (
+        signature,
+        time.time(),
+        slot,
+        PUMP_PROGRAM,
+    ))
+
+    db.commit()
+
+
+def save_transaction(
+    signature,
+    tx,
+):
+
+    logs = tx_logs(tx)
+
+    migrate_v2 = int(
+        contains_exact_migrate_v2(
+            logs
+        )
+    )
+
+    create_pool = int(
+        contains_create_pool(
+            logs
+        )
+    )
+
+    account_keys = extract_account_keys(
+        tx
+    )
+
+    candidate_mints = extract_candidate_mints(
+        tx
+    )
+
+    token_mint = choose_token_mint(
+        candidate_mints
+    )
+
+    slot = tx.get("slot")
+    block_time = tx.get("blockTime")
+
+    confirmed = int(
+        tx.get("meta") is not None
+        and (
+            tx.get("meta")
+            or {}
+        ).get("err") is None
+    )
+
+    status = "OK"
+
+    error = None
+
+    if not migrate_v2:
+
+        status = "REJECT_NOT_MIGRATE_V2"
+
+    elif not create_pool:
+
+        status = "MIGRATE_NO_CREATEPOOL"
+
+    elif not confirmed:
+
+        status = "FAILED_TX"
+
+    elif token_mint is None:
+
+        status = "AMBIGUOUS_MINT"
+
+        error = (
+            f"{len(candidate_mints)} candidate mints"
+        )
+
+    db.execute(f"""
+    UPDATE {TABLE}
+
+    SET
+        block_time=?,
+        slot=?,
+
+        token_mint=?,
+
+        pumpswap_program=?,
+
+        migrate_v2=?,
+        create_pool=?,
+
+        confirmed=?,
+
+        account_keys_json=?,
+        candidate_mints_json=?,
+
+        status=?,
+        error=?
+
+    WHERE signature=?
+    """, (
+
+        block_time,
+        slot,
+
+        token_mint,
+
+        (
+            PUMPSWAP_PROGRAM
+            if create_pool
+            else None
+        ),
+
+        migrate_v2,
+        create_pool,
+
+        confirmed,
+
+        json.dumps(
+            account_keys
+        ),
+
+        json.dumps(
+            candidate_mints
+        ),
+
+        status,
+        error,
+
+        signature,
+    ))
+
+    db.commit()
+
+    return {
+        "signature": signature,
+        "slot": slot,
+        "block_time": block_time,
+        "token_mint": token_mint,
+        "candidate_mints": candidate_mints,
+        "migrate_v2": migrate_v2,
+        "create_pool": create_pool,
+        "confirmed": confirmed,
+        "status": status,
+    }
+
+
+def save_error(
+    signature,
+    error,
+):
+
+    db.execute(f"""
+    UPDATE {TABLE}
+
+    SET
+        status='ERROR',
+        error=?
+
+    WHERE signature=?
+    """, (
+        str(error),
+        signature,
+    ))
+
+    db.commit()
+
+
+# ------------------------------------------------------------
+# DISPLAY
+# ------------------------------------------------------------
+
+def stats():
+
+    row = db.execute(f"""
+    SELECT
+        COUNT(*) AS total,
+
+        SUM(
+            CASE
+            WHEN status='OK'
+            THEN 1 ELSE 0 END
+        ) AS ok,
+
+        SUM(
+            CASE
+            WHEN status='AMBIGUOUS_MINT'
+            THEN 1 ELSE 0 END
+        ) AS ambiguous,
+
+        SUM(
+            CASE
+            WHEN status='ERROR'
+            THEN 1 ELSE 0 END
+        ) AS errors
+
+    FROM {TABLE}
+    """).fetchone()
+
+    return row
+
+
+# ------------------------------------------------------------
+# STREAM
+# ------------------------------------------------------------
+
+async def main():
+
+    if not WS_URL:
+        raise RuntimeError(
+            "SOLANA_WS_URL absent de .env"
+        )
+
+    if not RPC_URL:
+        raise RuntimeError(
+            "Aucune URL RPC HTTP trouvée."
+        )
+
+    print("=" * 110)
+    print(
+        "MEMECOIN LAB — T101B MIGRATEV2 RECORDER"
+    )
+    print("=" * 110)
+
+    print(
+        "STREAM     : Pump.fun logsSubscribe"
+    )
+
+    print(
+        "DETECTION  : exact Instruction: MigrateV2"
+    )
+
+    print(
+        "CONFIRM    : getTransaction"
+    )
+
+    print(
+        "CREATEPOOL : checked"
+    )
+
+    print(
+        "DB TABLE   :",
+        TABLE
+    )
+
+    print()
+
+    async with websockets.connect(
+        WS_URL,
+        ping_interval=30,
+        ping_timeout=20,
+        max_size=None,
+    ) as ws:
+
+        request = {
+            "jsonrpc": "2.0",
+            "id": 101,
+            "method": "logsSubscribe",
+            "params": [
+                {
+                    "mentions": [
+                        PUMP_PROGRAM
+                    ]
+                },
+                {
+                    "commitment": "processed"
+                }
+            ]
+        }
+
+        await ws.send(
+            json.dumps(request)
+        )
+
+        first = json.loads(
+            await ws.recv()
+        )
+
+        if "error" in first:
+
+            raise RuntimeError(
+                first["error"]
+            )
+
+        print(
+            "✅ logsSubscribe accepted"
+        )
+
+        print(
+            "Subscription:",
+            first.get("result")
+        )
+
+        print()
+
+        pump_txs = 0
+        detected = 0
+
+        while True:
+
+            raw = await ws.recv()
+
+            msg = json.loads(raw)
+
+            params = msg.get(
+                "params"
+            )
+
+            if not params:
+                continue
+
+            result = params.get(
+                "result",
+                {}
+            )
+
+            context = result.get(
+                "context",
+                {}
+            )
+
+            value = result.get(
+                "value",
+                {}
+            )
+
+            signature = value.get(
+                "signature"
+            )
+
+            logs = value.get(
+                "logs"
+            ) or []
+
+            err = value.get(
+                "err"
+            )
+
+            if (
+                not signature
+                or err is not None
+            ):
+                continue
+
+            pump_txs += 1
+
+            if not contains_exact_migrate_v2(
+                logs
+            ):
+
+                print(
+                    f"\rPUMP TX={pump_txs:,} "
+                    f"| MIGRATEV2={detected:,}",
+                    end="",
+                    flush=True
+                )
+
+                continue
+
+            detected += 1
+
+            slot = context.get(
+                "slot"
+            )
+
+            save_detection(
+                signature,
+                slot,
+            )
+
+            print()
+            print("=" * 110)
+            print(
+                f"🚨 MIGRATEV2 #{detected}"
+            )
+            print("=" * 110)
+
+            print(
+                "SIGNATURE:",
+                signature
+            )
+
+            try:
+
+                tx = await asyncio.to_thread(
+                    get_transaction,
+                    signature
+                )
+
+                if tx is None:
+
+                    raise RuntimeError(
+                        "getTransaction returned null"
+                    )
+
+                info = save_transaction(
+                    signature,
+                    tx
+                )
+
+                print(
+                    "STATUS     :",
+                    info["status"]
+                )
+
+                print(
+                    "SLOT       :",
+                    info["slot"]
+                )
+
+                print(
+                    "MINT       :",
+                    info["token_mint"]
+                )
+
+                print(
+                    "CANDIDATES :",
+                    info["candidate_mints"]
+                )
+
+                print(
+                    "CREATEPOOL :",
+                    bool(
+                        info[
+                            "create_pool"
+                        ]
+                    )
+                )
+
+                print(
+                    "CONFIRMED  :",
+                    bool(
+                        info[
+                            "confirmed"
+                        ]
+                    )
+                )
+
+            except Exception as exc:
+
+                save_error(
+                    signature,
+                    exc
+                )
+
+                print(
+                    "❌ ERROR:",
+                    exc
+                )
+
+            s = stats()
+
+            print()
+            print(
+                f"TOTAL={s['total'] or 0} "
+                f"| OK={s['ok'] or 0} "
+                f"| AMBIGUOUS={s['ambiguous'] or 0} "
+                f"| ERROR={s['errors'] or 0}"
+            )
+
+            print()
+
+
+if __name__ == "__main__":
+
+    while True:
+
+        try:
+            asyncio.run(main())
+
+        except KeyboardInterrupt:
+            print()
+            print("T101B stopped safely.")
+            break
+
+        except Exception as exc:
+            print()
+            print("=" * 100)
+            print("⚠️ T101B STREAM DISCONNECTED")
+            print("ERROR:", repr(exc))
+            print("Reconnecting in 5 seconds...")
+            print("=" * 100)
+
+            time.sleep(5)
+
+    db.close()

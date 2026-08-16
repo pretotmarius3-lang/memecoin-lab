@@ -1,0 +1,704 @@
+#!/usr/bin/env python3
+
+import asyncio
+import json
+import os
+import sqlite3
+import time
+import hashlib
+
+import aiohttp
+import websockets
+from dotenv import load_dotenv
+
+import event_tracker_v090 as et
+
+load_dotenv(".env")
+
+DB = "validation_v090.db"
+
+WS_URL = os.getenv("SOLANA_WS_URL")
+RPC_URL = os.getenv("SOLANA_RPC_URL")
+
+if not WS_URL or not RPC_URL:
+    raise RuntimeError("SOLANA_WS_URL / SOLANA_RPC_URL absents du .env")
+
+MIGRATIONS = "t101_migrations"
+TRACK_TABLE = "t107_targeted_pumpswap_signatures"
+
+REFRESH_MINTS = 5
+RPC_RPS = 4.0
+FETCH_DELAY = 1.0
+MAX_RETRIES = 6
+
+# Deterministic prospective sampling.
+# Same signature always receives the same decision.
+SAMPLE_PERCENT = 10
+
+db = sqlite3.connect(DB, timeout=30)
+db.row_factory = sqlite3.Row
+db.execute("PRAGMA busy_timeout=5000")
+
+db.execute(f"""
+CREATE TABLE IF NOT EXISTS {TRACK_TABLE} (
+    signature TEXT PRIMARY KEY,
+    token_mint TEXT NOT NULL,
+    slot INTEGER,
+    received_at REAL NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    error TEXT
+)
+""")
+
+db.execute(f"""
+CREATE INDEX IF NOT EXISTS idx_t107_mint_status
+ON {TRACK_TABLE}(token_mint, status)
+""")
+
+db.commit()
+
+def take_signature(signature):
+    """
+    Deterministic hash sampling.
+
+    10% means approximately one signature out of ten
+    enters the expensive getTransaction pipeline.
+    """
+
+    h = hashlib.sha256(
+        signature.encode()
+    ).digest()
+
+    value = int.from_bytes(
+        h[:8],
+        "big"
+    )
+
+    return (
+        value % 100
+        < SAMPLE_PERCENT
+    )
+
+
+def target_mints():
+
+    rows = db.execute("""
+    SELECT DISTINCT token_mint
+    FROM t101_migrations
+    WHERE
+        status='OK'
+        AND confirmed=1
+        AND migrate_v2=1
+        AND create_pool=1
+        AND token_mint IS NOT NULL
+    """).fetchall()
+
+    return {
+        r["token_mint"]
+        for r in rows
+    }
+
+async def rpc_tx(session, signature):
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 107,
+        "method": "getTransaction",
+        "params": [
+            signature,
+            {
+                "encoding": "jsonParsed",
+                "commitment": "confirmed",
+                "maxSupportedTransactionVersion": 0,
+            }
+        ]
+    }
+
+    try:
+        async with session.post(
+            RPC_URL,
+            json=payload,
+            timeout=15
+        ) as response:
+
+            if response.status == 429:
+                return None, "429"
+
+            if response.status != 200:
+                return None, f"HTTP_{response.status}"
+
+            body = await response.json()
+
+            if "error" in body:
+                return None, str(body["error"])
+
+            return body.get("result"), None
+
+    except Exception as exc:
+        return None, repr(exc)
+
+def save_swap(signature, slot, subscribed_mint, tx):
+
+    swap = et.classify(tx)
+
+    if not swap:
+        return False, "NOT_SWAP"
+
+    if swap["mint"] != subscribed_mint:
+        return False, f"MINT_MISMATCH:{swap['mint']}"
+
+    valid, clean, reason = et.clean_price(
+        swap["mint"],
+        swap["price"]
+    )
+
+    block_time = tx.get("blockTime")
+
+    timestamp = (
+        float(block_time)
+        if block_time is not None
+        else time.time()
+    )
+
+    db.execute("""
+    INSERT OR IGNORE INTO swaps (
+        signature,
+        timestamp,
+        slot,
+        program,
+        wallet,
+        side,
+        token_mint,
+        token_delta,
+        sol_delta,
+        raw_price,
+        clean_price,
+        price_valid,
+        reject_reason
+    )
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        signature,
+        timestamp,
+        slot,
+        "PUMPSWAP",
+
+        swap["wallet"],
+        swap["side"],
+        swap["mint"],
+
+        swap["token_delta"],
+        swap["sol_delta"],
+
+        swap["price"],
+        clean,
+
+        int(valid),
+        reason,
+    ))
+
+    db.commit()
+
+    return True, reason
+
+queue = asyncio.Queue()
+
+async def processor(session):
+
+    interval = 1.0 / RPC_RPS
+    last_rpc = 0.0
+
+    while True:
+
+        item = await queue.get()
+
+        signature = item["signature"]
+        mint = item["token_mint"]
+        slot = item["slot"]
+
+        row = db.execute(f"""
+        SELECT *
+        FROM {TRACK_TABLE}
+        WHERE signature=?
+        """, (signature,)).fetchone()
+
+        if (
+            not row
+            or row["status"] not in ("WAITING", "RETRY")
+        ):
+            queue.task_done()
+            continue
+
+        wait = FETCH_DELAY - (
+            time.time() - row["received_at"]
+        )
+
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        elapsed = time.monotonic() - last_rpc
+
+        if elapsed < interval:
+            await asyncio.sleep(interval - elapsed)
+
+        last_rpc = time.monotonic()
+
+        tx, rpc_error = await rpc_tx(
+            session,
+            signature
+        )
+
+        if tx is None:
+
+            attempts = row["attempts"] + 1
+
+            if attempts >= MAX_RETRIES:
+
+                db.execute(f"""
+                UPDATE {TRACK_TABLE}
+                SET
+                    attempts=?,
+                    status='FAILED',
+                    error=?
+                WHERE signature=?
+                """, (
+                    attempts,
+                    rpc_error,
+                    signature
+                ))
+
+            else:
+
+                db.execute(f"""
+                UPDATE {TRACK_TABLE}
+                SET
+                    attempts=?,
+                    status='RETRY',
+                    error=?
+                WHERE signature=?
+                """, (
+                    attempts,
+                    rpc_error,
+                    signature
+                ))
+
+                db.commit()
+
+                await asyncio.sleep(
+                    min(2 ** attempts, 10)
+                )
+
+                await queue.put(item)
+
+                queue.task_done()
+                continue
+
+            db.commit()
+            queue.task_done()
+            continue
+
+        if tx.get("meta", {}).get("err") is not None:
+
+            db.execute(f"""
+            UPDATE {TRACK_TABLE}
+            SET status='FAILED_TX'
+            WHERE signature=?
+            """, (
+                signature,
+            ))
+
+            db.commit()
+            queue.task_done()
+            continue
+
+        ok, reason = save_swap(
+            signature,
+            slot,
+            mint,
+            tx
+        )
+
+        if ok:
+            status = "DONE"
+        elif reason == "NOT_SWAP":
+            status = "NOT_SWAP"
+        else:
+            status = "REJECTED"
+
+        db.execute(f"""
+        UPDATE {TRACK_TABLE}
+        SET
+            status=?,
+            error=?
+        WHERE signature=?
+        """, (
+            status,
+            reason,
+            signature
+        ))
+
+        db.commit()
+        queue.task_done()
+
+async def subscribe_mint(ws, mint, request_id):
+
+    request = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "logsSubscribe",
+        "params": [
+            {
+                "mentions": [
+                    mint
+                ]
+            },
+            {
+                "commitment": "processed"
+            }
+        ]
+    }
+
+    await ws.send(json.dumps(request))
+
+async def run_session(session):
+
+    async with websockets.connect(
+        WS_URL,
+        ping_interval=20,
+        ping_timeout=20,
+        max_size=None
+    ) as ws:
+
+        subscribed = set()
+        pending_requests = {}
+        subscription_to_mint = {}
+
+        request_id = 1000
+
+        async def refresh():
+
+            nonlocal request_id
+
+            while True:
+
+                wanted = target_mints()
+
+                new_mints = (
+                    wanted
+                    - subscribed
+                )
+
+                for mint in sorted(new_mints):
+
+                    request_id += 1
+
+                    pending_requests[
+                        request_id
+                    ] = mint
+
+                    await subscribe_mint(
+                        ws,
+                        mint,
+                        request_id
+                    )
+
+                    subscribed.add(
+                        mint
+                    )
+
+                await asyncio.sleep(
+                    REFRESH_MINTS
+                )
+
+        refresh_task = asyncio.create_task(
+            refresh()
+        )
+
+        print()
+        print("✅ T107 WebSocket connected")
+
+        try:
+
+            while True:
+
+                raw = await ws.recv()
+
+                msg = json.loads(raw)
+
+                if (
+                    "id" in msg
+                    and "result" in msg
+                    and "params" not in msg
+                ):
+
+                    rid = msg["id"]
+
+                    mint = pending_requests.pop(
+                        rid,
+                        None
+                    )
+
+                    if mint:
+
+                        sub_id = msg["result"]
+
+                        subscription_to_mint[
+                            sub_id
+                        ] = mint
+
+                        print(
+                            f"🎯 SUBSCRIBED "
+                            f"| {mint[:18]}... "
+                            f"| sub={sub_id}"
+                        )
+
+                    continue
+
+                params = msg.get("params")
+
+                if not params:
+                    continue
+
+                sub_id = params.get(
+                    "subscription"
+                )
+
+                mint = subscription_to_mint.get(
+                    sub_id
+                )
+
+                if not mint:
+                    continue
+
+                result = params.get(
+                    "result",
+                    {}
+                )
+
+                context = result.get(
+                    "context",
+                    {}
+                )
+
+                value = result.get(
+                    "value",
+                    {}
+                )
+
+                if value.get("err") is not None:
+                    continue
+
+                signature = value.get(
+                    "signature"
+                )
+
+                if not signature:
+                    continue
+
+                # Sampling happens BEFORE getTransaction.
+                # This is what protects the RPC budget.
+                if not take_signature(signature):
+                    continue
+
+                cur = db.execute(f"""
+                INSERT OR IGNORE INTO {TRACK_TABLE} (
+                    signature,
+                    token_mint,
+                    slot,
+                    received_at,
+                    attempts,
+                    status
+                )
+                VALUES (?, ?, ?, ?, 0, 'WAITING')
+                """, (
+                    signature,
+                    mint,
+                    context.get("slot"),
+                    time.time(),
+                ))
+
+                db.commit()
+
+                if cur.rowcount:
+
+                    await queue.put({
+                        "signature": signature,
+                        "token_mint": mint,
+                        "slot": context.get("slot"),
+                    })
+
+        finally:
+            refresh_task.cancel()
+
+async def monitor():
+
+    while True:
+
+        await asyncio.sleep(10)
+
+        tracked = len(
+            target_mints()
+        )
+
+        stats = db.execute(f"""
+        SELECT
+            COUNT(*) AS total,
+
+            SUM(
+                CASE
+                WHEN status='WAITING'
+                THEN 1 ELSE 0 END
+            ) AS waiting,
+
+            SUM(
+                CASE
+                WHEN status='DONE'
+                THEN 1 ELSE 0 END
+            ) AS done,
+
+            SUM(
+                CASE
+                WHEN status='NOT_SWAP'
+                THEN 1 ELSE 0 END
+            ) AS not_swap,
+
+            SUM(
+                CASE
+                WHEN status='REJECTED'
+                THEN 1 ELSE 0 END
+            ) AS rejected,
+
+            SUM(
+                CASE
+                WHEN status='FAILED'
+                THEN 1 ELSE 0 END
+            ) AS failed
+
+        FROM {TRACK_TABLE}
+        """).fetchone()
+
+        our_swaps = db.execute("""
+        SELECT COUNT(*)
+        FROM swaps s
+        WHERE
+            s.program='PUMPSWAP'
+            AND EXISTS (
+                SELECT 1
+                FROM t101_migrations m
+                WHERE
+                    m.token_mint=s.token_mint
+                    AND m.status='OK'
+            )
+        """).fetchone()[0]
+
+        tokens_with_flow = db.execute("""
+        SELECT COUNT(DISTINCT s.token_mint)
+        FROM swaps s
+        WHERE
+            s.program='PUMPSWAP'
+            AND EXISTS (
+                SELECT 1
+                FROM t101_migrations m
+                WHERE
+                    m.token_mint=s.token_mint
+                    AND m.status='OK'
+            )
+        """).fetchone()[0]
+
+        print()
+        print("─" * 125)
+        print("T107 TARGETED PUMPSWAP")
+
+        print(
+            f"TRACKED MINTS={tracked}"
+            f" | QUEUE={queue.qsize()}"
+            f" | RECEIVED={stats['total'] or 0}"
+            f" | WAITING={stats['waiting'] or 0}"
+            f" | DONE={stats['done'] or 0}"
+            f" | NOT_SWAP={stats['not_swap'] or 0}"
+            f" | REJECTED={stats['rejected'] or 0}"
+            f" | FAILED={stats['failed'] or 0}"
+        )
+
+        print(
+            f"PUMPSWAP SWAPS FOR OUR TOKENS={our_swaps}"
+            f" | TOKENS WITH FLOW={tokens_with_flow}"
+        )
+
+async def main():
+
+    print()
+    print("=" * 125)
+    print(
+        "MEMECOIN LAB — T107 TARGETED PUMPSWAP FLOW COLLECTOR"
+    )
+    print("=" * 125)
+
+    print(
+        "UNIVERSE      : t101_migrations status=OK"
+    )
+    print(
+        "SUBSCRIPTION  : one logsSubscribe per token mint"
+    )
+    print(
+        "GLOBAL PUMP   : NOT INGESTED"
+    )
+    print(
+        "RPC FETCH     : only transactions touching tracked mints"
+    )
+    print(
+        "PARSER        : event_tracker_v090.classify"
+    )
+    print(
+        "OUTPUT        : existing swaps table"
+    )
+    print("=" * 125)
+
+    connector = aiohttp.TCPConnector(
+        limit=10
+    )
+
+    async with aiohttp.ClientSession(
+        connector=connector
+    ) as session:
+
+        asyncio.create_task(
+            processor(session)
+        )
+
+        asyncio.create_task(
+            monitor()
+        )
+
+        while True:
+
+            try:
+                await run_session(session)
+
+            except asyncio.CancelledError:
+                raise
+
+            except KeyboardInterrupt:
+                raise
+
+            except Exception as exc:
+
+                print()
+                print("⚠️ T107 WS DISCONNECTED")
+                print("ERROR:", repr(exc))
+                print("Reconnecting in 5 seconds...")
+
+                await asyncio.sleep(5)
+
+if __name__ == "__main__":
+
+    try:
+        asyncio.run(main())
+
+    except KeyboardInterrupt:
+        print()
+        print("T107 stopped safely.")
+
+    finally:
+        db.close()

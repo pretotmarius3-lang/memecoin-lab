@@ -1,0 +1,92 @@
+{
+  "boundary_id": 897,
+  "cap_eps": 0.05,
+  "control_model": "M0_CONTEXT",
+  "created_at_unix": 1786734769.8783748,
+  "experiment": "T59_CAPV2_PROSPECTIVE",
+  "freeze_sha256": "9fcca1b4d8887acf6e7eb3b547afd113eb369805f4e220cca13820093d923065",
+  "frozen": true,
+  "methodology": {
+    "coefficient_fit": "TRAIN_ONLY",
+    "net_eff": "DIAGNOSTIC_ONLY",
+    "primary_definition": "early_price_return - early_net_sol",
+    "primary_feature": "early_div",
+    "prospective_refit": false,
+    "standardization": "TRAIN_ONLY",
+    "threshold_optimization": false
+  },
+  "models": {
+    "M0_CONTEXT": {
+      "coefficients": {
+        "breadth_score": -0.14476484990735403,
+        "fa": -0.4554996922753238,
+        "late_chase_score": 0.06907442769410402,
+        "new_wallets30": -0.08386746145654356,
+        "recent_buy_share": -0.09005758618633518,
+        "recent_net_share": -0.1876751037165921
+      },
+      "features": [
+        "fa",
+        "new_wallets30",
+        "recent_buy_share",
+        "recent_net_share",
+        "breadth_score",
+        "late_chase_score"
+      ],
+      "intercept": -0.37288495091832513
+    },
+    "M3_EARLYDIV_ONLY": {
+      "coefficients": {
+        "breadth_score": -0.1426488939665043,
+        "early_div": -0.1963322933211472,
+        "fa": -0.4878934076775079,
+        "late_chase_score": 0.08005471660674454,
+        "new_wallets30": -0.09357638563142963,
+        "recent_buy_share": -0.09435798385742783,
+        "recent_net_share": -0.19845746888823784
+      },
+      "features": [
+        "fa",
+        "new_wallets30",
+        "recent_buy_share",
+        "recent_net_share",
+        "breadth_score",
+        "late_chase_score",
+        "early_div"
+      ],
+      "intercept": -0.3786434693721788
+    }
+  },
+  "outcome": {
+    "dump_threshold": -10.0,
+    "runner_threshold": 10.0,
+    "target": "dex_return_60s"
+  },
+  "primary_model": "M3_EARLYDIV_ONLY",
+  "seed": 58,
+  "source_lab": "T58",
+  "standardization": {
+    "means": {
+      "breadth_score": 0.6969917812635072,
+      "early_div": 4.589069101537886,
+      "fa": 0.34792354320099006,
+      "late_chase_score": 0.6144380038418934,
+      "net_eff": 0.12282766470276099,
+      "new_wallets30": 3.128712871287129,
+      "price_per_net": 2.087565406837139,
+      "recent_buy_share": 0.3558274948663024,
+      "recent_net_share": -0.010388946562179842
+    },
+    "stds": {
+      "breadth_score": 0.6520693033813775,
+      "early_div": 30.80667433357514,
+      "fa": 0.7474350875634753,
+      "late_chase_score": 0.4200478573342629,
+      "net_eff": 0.7308656262041313,
+      "new_wallets30": 2.5819762418730168,
+      "price_per_net": 64.28861336248889,
+      "recent_buy_share": 0.23747156347361595,
+      "recent_net_share": 0.4243824890375545
+    }
+  }
+}
