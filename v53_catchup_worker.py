@@ -4,7 +4,9 @@
 Runs beside v51_spool_collector.py. It does NOT open another websocket.
 It drains v51_signature_spool from v5_raw_events.db with bounded concurrency,
 writes into v5_raw_transactions using the exact V5.1 schema, and backs off on
-429s. Research-only data infrastructure; never signs/submits transactions.
+429s. By default it uses HELIUS_API_KEY_2 so the catch-up lane can be isolated
+from the live collector using HELIUS_API_KEY.
+Research-only data infrastructure; never signs/submits transactions.
 """
 from __future__ import annotations
 import asyncio, json, os, random, signal, sqlite3, time, zlib
@@ -18,13 +20,16 @@ except ImportError:
 
 ROOT=Path.home()/"memecoin_lab"
 DB_PATH=Path(os.environ.get('MEMECOIN_V5_DB',ROOT/'v5_raw_events.db'))
-KEY=os.environ.get('HELIUS_API_KEY','').strip()
+KEY2=os.environ.get('HELIUS_API_KEY_2','').strip()
+KEY1=os.environ.get('HELIUS_API_KEY','').strip()
+KEY=KEY2 or KEY1
+KEY_SOURCE='HELIUS_API_KEY_2' if KEY2 else ('HELIUS_API_KEY' if KEY1 else 'MISSING')
 HTTP_BASE=os.environ.get('HELIUS_HTTP_BASE','https://mainnet.helius-rpc.com/')
-RPC=os.environ.get('HELIUS_RPC_URL') or (f'{HTTP_BASE}?api-key={quote(KEY)}' if KEY else '')
+RPC=os.environ.get('HELIUS_RPC_URL_2') or os.environ.get('HELIUS_RPC_URL') or (f'{HTTP_BASE}?api-key={quote(KEY)}' if KEY else '')
 COMMITMENT=os.environ.get('MEMECOIN_V5_COMMITMENT','confirmed')
-BASE=int(os.environ.get('MEMECOIN_V53_CONCURRENCY','12'))
-MAXC=int(os.environ.get('MEMECOIN_V53_MAX_CONCURRENCY','32'))
-BATCH=int(os.environ.get('MEMECOIN_V53_BATCH','240'))
+BASE=int(os.environ.get('MEMECOIN_V53_CONCURRENCY','8'))
+MAXC=int(os.environ.get('MEMECOIN_V53_MAX_CONCURRENCY','16'))
+BATCH=int(os.environ.get('MEMECOIN_V53_BATCH','120'))
 LEASE=float(os.environ.get('MEMECOIN_V53_LEASE_S','90'))
 MAX_RETRIES=int(os.environ.get('MEMECOIN_V51_MAX_RETRIES','12'))
 STOP=False
@@ -40,13 +45,14 @@ def db():
 
 
 def init():
-    if not RPC: raise SystemExit('HELIUS_API_KEY is not set')
+    if not RPC: raise SystemExit('No Helius key loaded. Set HELIUS_API_KEY_2 for catch-up (preferred) or HELIUS_API_KEY as fallback.')
     if not DB_PATH.exists(): raise SystemExit(f'V5 DB not found: {DB_PATH}')
     c=db()
     names={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     missing={'v51_signature_spool','v5_raw_transactions'}-names
     c.close()
     if missing: raise SystemExit(f'V5.1 tables missing in {DB_PATH}: {sorted(missing)}')
+    print(f'V5.3 provider: {KEY_SOURCE} | key_length={len(KEY)} | base_concurrency={BASE} | batch={BATCH}',flush=True)
 
 
 def claim(limit):
@@ -139,7 +145,7 @@ async def main():
             if rate429>.08: concurrency=max(2,int(concurrency*.65)); await asyncio.sleep(1.5+random.random())
             elif rate429==0 and states.count('OK')/max(1,len(states))>.78: concurrency=min(MAXC,concurrency+1)
             c=db(); counts={r['status']:r['n'] for r in c.execute("SELECT status,COUNT(*) n FROM v51_signature_spool GROUP BY status")}; raw=c.execute('SELECT COUNT(*) FROM v5_raw_transactions').fetchone()[0]; c.close()
-            print(f"V5.3 catchup | c={concurrency:02d} batch={len(states):3d} ok={states.count('OK'):3d} 429={states.count('429'):3d} pending={counts.get('PENDING',0):,} fetching={counts.get('FETCHING',0):,} done={counts.get('DONE',0):,} raw={raw:,} inserted+={inserted} total_inserted={total_inserted:,}",flush=True)
+            print(f"V5.3 catchup[{KEY_SOURCE}] | c={concurrency:02d} batch={len(states):3d} ok={states.count('OK'):3d} 429={states.count('429'):3d} pending={counts.get('PENDING',0):,} fetching={counts.get('FETCHING',0):,} done={counts.get('DONE',0):,} raw={raw:,} inserted+={inserted} total_inserted={total_inserted:,}",flush=True)
 
 
 if __name__=='__main__':
