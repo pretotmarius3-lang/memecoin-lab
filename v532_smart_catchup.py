@@ -28,10 +28,11 @@ COMMITMENT=os.environ.get('MEMECOIN_V5_COMMITMENT','confirmed')
 TARGET_RPS=float(os.environ.get('MEMECOIN_V532_RPS','6.0'))
 MIN_RPS=float(os.environ.get('MEMECOIN_V532_MIN_RPS','0.5'))
 MAX_RPS=float(os.environ.get('MEMECOIN_V532_MAX_RPS','8.0'))
-CLAIM_N=int(os.environ.get('MEMECOIN_V532_CLAIM','60'))
+CLAIM_N=int(os.environ.get('MEMECOIN_V532_CLAIM','20'))
 LEASE=float(os.environ.get('MEMECOIN_V532_LEASE_S','120'))
 MAX_RETRIES=int(os.environ.get('MEMECOIN_V51_MAX_RETRIES','20'))
 LIVE_FIRST_S=float(os.environ.get('MEMECOIN_V532_LIVE_FIRST_S','900'))
+HEARTBEAT_S=float(os.environ.get('MEMECOIN_V532_HEARTBEAT_S','5'))
 STOP=False
 
 def stop(*_):
@@ -53,8 +54,6 @@ def claim(limit):
     c=db(); now=time.time(); c.execute('BEGIN IMMEDIATE')
     try:
         c.execute("UPDATE v51_signature_spool SET status='PENDING',lease_until=NULL,updated_at=? WHERE status='FETCHING' AND lease_until<?",(now,now))
-        # Priority first, then recent rows inside each priority band. This prevents
-        # an unbounded historical queue from starving fresh research data.
         rows=c.execute("""SELECT * FROM v51_signature_spool
           WHERE status='PENDING' AND attempts<?
           ORDER BY
@@ -118,13 +117,22 @@ async def fetch(session,row):
 def stats():
     c=db(); counts={r['status']:r['n'] for r in c.execute("SELECT status,COUNT(*) n FROM v51_signature_spool GROUP BY status")}; raw=c.execute('SELECT COUNT(*) FROM v5_raw_transactions').fetchone()[0]; newest=c.execute("SELECT MAX(observed_at) FROM v5_raw_transactions").fetchone()[0]; c.close(); return counts,raw,newest
 
+def emit_status(rps,total_ok,total_429,total_ins,started,state='RUNNING'):
+    counts,raw,newest=stats(); runtime=max(1,time.time()-started); success_rps=total_ok/runtime; ratio=total_429/max(1,total_ok+total_429); pending=counts.get('PENDING',0)
+    eta_h=(pending/max(.01,success_rps))/3600 if success_rps>0 else math.inf
+    eta='∞' if not math.isfinite(eta_h) else f'{eta_h:.1f}h'
+    age='—' if not newest else f'{max(0,time.time()-newest):.1f}s'
+    print(f"V5.3.2 | {state:<8} pace={rps:4.2f}rps success={success_rps:4.2f}/s 429={ratio*100:4.1f}% pending={pending:,} done={counts.get('DONE',0):,} raw={raw:,} raw_age={age} inserted={total_ins:,} ETA={eta}",flush=True)
+
 async def main():
-    init(); rps=max(MIN_RPS,min(MAX_RPS,TARGET_RPS)); streak=0; total_ok=total_429=total_ins=0; started=time.time(); backoff=0.0
+    init(); rps=max(MIN_RPS,min(MAX_RPS,TARGET_RPS)); streak=0; total_ok=total_429=total_ins=0; started=time.time(); backoff=0.0; last_heartbeat=0.0
     connector=aiohttp.TCPConnector(limit=2,ttl_dns_cache=300)
     async with aiohttp.ClientSession(connector=connector,headers={'Content-Type':'application/json'}) as session:
         while not STOP:
             rows=claim(CLAIM_N)
             if not rows:
+                if time.time()-last_heartbeat>=HEARTBEAT_S:
+                    emit_status(rps,total_ok,total_429,total_ins,started,'IDLE'); last_heartbeat=time.time()
                 await asyncio.sleep(.5); continue
             for row in rows:
                 if STOP: reset(row,'shutdown'); break
@@ -137,11 +145,11 @@ async def main():
                 elif state=='429':
                     total_429+=1; streak=0; rps=max(MIN_RPS,rps*.65); backoff=max(retry or 0, min(30,1.0+random.random()))
                 else: streak=0
+                if time.time()-last_heartbeat>=HEARTBEAT_S:
+                    emit_status(rps,total_ok,total_429,total_ins,started,state); last_heartbeat=time.time()
                 await asyncio.sleep(max(0,1.0/max(.1,rps)-elapsed))
-            counts,raw,newest=stats(); runtime=max(1,time.time()-started); success_rps=total_ok/runtime; ratio=total_429/max(1,total_ok+total_429); pending=counts.get('PENDING',0)
-            eta_h=(pending/max(.01,success_rps))/3600 if success_rps>0 else math.inf
-            eta='∞' if not math.isfinite(eta_h) else f'{eta_h:.1f}h'
-            print(f"V5.3.2 | pace={rps:4.2f}rps success={success_rps:4.2f}/s 429={ratio*100:4.1f}% pending={pending:,} done={counts.get('DONE',0):,} raw={raw:,} inserted={total_ins:,} ETA={eta}",flush=True)
+            if time.time()-last_heartbeat>=HEARTBEAT_S:
+                emit_status(rps,total_ok,total_429,total_ins,started,'BATCH'); last_heartbeat=time.time()
 
 if __name__=='__main__':
     signal.signal(signal.SIGINT,stop); signal.signal(signal.SIGTERM,stop)
