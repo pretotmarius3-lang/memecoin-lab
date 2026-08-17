@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
 """Memecoin Lab V5.4.2 — Scientific Admission Controller.
 
-Purpose: the websocket sees far more signatures than a Free RPC plan can enrich.
-This controller does NOT delete backlog. It assigns an admission tier to pending
-spool rows so the fetcher spends RPC on the most information-dense observations.
-
-Tiers:
-  A  CREATE/MIGRATE and high-priority events — always service
-  B  recent events for tokens/wallets already represented in decoded science
-  C  deterministic exploration sample of otherwise unknown recent activity
-  D  historical/backfill — preserve, service only with spare budget
-
-Research-only. No signing, no trading, no transaction submission.
+Assigns admission tiers to pending spool signatures without deleting backlog.
+Compatible with spool schemas that do not contain token_hint.
 """
 from __future__ import annotations
 import hashlib, json, os, sqlite3, time
@@ -52,11 +43,14 @@ def deterministic_sample(sig,rate):
 def known_tokens():
     if not FEAT_DB.exists(): return set()
     c=db(FEAT_DB,True)
-    out={r[0] for r in c.execute('SELECT DISTINCT token_mint FROM v52_swaps WHERE token_mint IS NOT NULL')}
+    try: out={r[0] for r in c.execute('SELECT DISTINCT token_mint FROM v52_swaps WHERE token_mint IS NOT NULL')}
+    except sqlite3.Error: out=set()
     c.close(); return out
 
 def classify(r,known,now):
-    ev=(r['event_hint'] or 'OTHER').upper(); pri=int(r['priority'] or 99); age=max(0,now-float(r['first_seen'] or now)); token=r['token_hint']
+    ev=(r['event_hint'] or 'OTHER').upper(); pri=int(r['priority'] or 99); age=max(0,now-float(r['first_seen'] or now))
+    # token_hint is optional in the live spool schema.  Do not invent it.
+    token=r['token_hint'] if 'token_hint' in r.keys() else None
     if ev in ('CREATE','MIGRATE') or pri<=1:
         return 'A',1000-age/60,'structural/high-priority'
     if age<=RECENT_S and token and token in known:
@@ -67,7 +61,9 @@ def classify(r,known,now):
 
 def cycle():
     now=time.time(); known=known_tokens(); c=db(RAW_DB)
-    rows=c.execute("""SELECT signature,event_hint,priority,first_seen,token_hint
+    cols={r[1] for r in c.execute('PRAGMA table_info(v51_signature_spool)')}
+    token_expr='token_hint' if 'token_hint' in cols else 'NULL AS token_hint'
+    rows=c.execute(f"""SELECT signature,event_hint,priority,first_seen,{token_expr}
                       FROM v51_signature_spool
                       WHERE status='PENDING'
                       ORDER BY first_seen DESC LIMIT ?""",(BATCH,)).fetchall()
@@ -80,14 +76,14 @@ def cycle():
         c.executemany("""INSERT INTO v542_admission(signature,tier,score,reason,decided_at)
                          VALUES(?,?,?,?,?) ON CONFLICT(signature) DO UPDATE SET
                          tier=excluded.tier,score=excluded.score,reason=excluded.reason,decided_at=excluded.decided_at""",vals)
-        state={'classified':len(vals),'known_tokens':len(known),'tiers':counts,'explore_rate':EXPLORE_RATE,'recent_s':RECENT_S}
+        state={'classified':len(vals),'known_tokens':len(known),'tiers':counts,'explore_rate':EXPLORE_RATE,'recent_s':RECENT_S,'spool_has_token_hint':('token_hint' in cols)}
         c.execute("""INSERT INTO v542_state(key,value_json,updated_at) VALUES('latest',?,?)
                      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at""",
                   (json.dumps(state,separators=(',',':')),now))
         c.commit()
     except: c.rollback(); raise
     finally:c.close()
-    print(f"V5.4.2 ADMISSION | classified={len(vals):,} known_tokens={len(known):,} A={counts['A']:,} B={counts['B']:,} C={counts['C']:,} D={counts['D']:,} explore={EXPLORE_RATE*100:.1f}%",flush=True)
+    print(f"V5.4.2 ADMISSION | classified={len(vals):,} known_tokens={len(known):,} A={counts['A']:,} B={counts['B']:,} C={counts['C']:,} D={counts['D']:,} explore={EXPLORE_RATE*100:.1f}% token_hint={'yes' if 'token_hint' in cols else 'no'}",flush=True)
 
 def main():
     init()
