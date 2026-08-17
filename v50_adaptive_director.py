@@ -74,8 +74,19 @@ def propose_promotions():
         for r in rows:
             priority=min(1,.45*min(1,sf(r['holdout_rho'])/.30)+.35*min(1,max(0,sf(r['delta_rho']))/.20)+.20*min(1,int(r['n'])/250))
             if priority<.42: continue
-            pid='P_'+core.fingerprint({'x':r['experiment_id']},'v50:')[:24]; rationale=f"Side experiment improved parent: rho={sf(r['holdout_rho']):.3f}, delta={sf(r['delta_rho']):+.3f}, n={r['n']}. Requires fresh future-only validation."
-            before=d.total_changes; d.execute("INSERT OR IGNORE INTO v50_promotions VALUES(?,?,?,?,?,?,?,?,?,'PROPOSED',?,?,?)",(pid,r['experiment_id'],r['kind'],r['parent_key'],r['spec_json'],int(r['n']),r['holdout_rho'],r['delta_rho'],priority,now,rationale,now,now)); made+=int(d.total_changes>before)
+            pid='P_'+core.fingerprint({'x':r['experiment_id']},'v50:')[:24]
+            rationale=f"Side experiment improved parent: rho={sf(r['holdout_rho']):.3f}, delta={sf(r['delta_rho']):+.3f}, n={r['n']}. Requires fresh future-only validation."
+            before=d.total_changes
+            d.execute("""
+                INSERT OR IGNORE INTO v50_promotions(
+                    promotion_id,experiment_id,kind,parent_key,spec_json,evidence_n,
+                    holdout_rho,delta_rho,priority,freeze_cutoff,state,rationale,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,'PROPOSED',?,?,?)
+            """,(
+                pid,r['experiment_id'],r['kind'],r['parent_key'],r['spec_json'],int(r['n']),
+                r['holdout_rho'],r['delta_rho'],priority,now,rationale,now,now
+            ))
+            made+=int(d.total_changes>before)
         d.commit()
     except: d.rollback(); raise
     finally:d.close()
