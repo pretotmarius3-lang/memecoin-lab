@@ -151,11 +151,9 @@ def rebuild_families():
  try:
   d.execute('DELETE FROM v61_family_champions')
   for fam,rs in by.items():
-   pos=[r for r in rs if sf(r['holdout_expectancy'],-1)<=0 and False]
-   # positive economic instances only
    pos=[r for r in rs if sf(r['holdout_expectancy'],-1)>0 and sf(r['holdout_profit_factor'],0)>1 and sf(r['expectancy_lift'],-1)>0]
    indep=independent_subset(pos)
-   toks=set();
+   toks=set()
    for r in indep:toks.update(json.loads(r['selected_tokens_json']))
    exps=[sf(r['holdout_expectancy']) for r in indep if sf(r['holdout_expectancy']) is not None]
    pfs=[sf(r['holdout_profit_factor']) for r in indep if sf(r['holdout_profit_factor']) is not None]
@@ -177,7 +175,7 @@ def rebuild_families():
    evidence={'instances':[r['experiment_id'] for r in pos],'independent_instances':[r['experiment_id'] for r in indep],
     'regimes':[list(x) for x in sorted(regimes)],'unique_tokens':len(toks),'max_overlap':maxov,
     'overlap_threshold':MAX_OVERLAP_FOR_INDEPENDENT}
-   d.execute("""INSERT INTO v61_family_champions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+   d.execute("""INSERT INTO v61_family_champions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
     (fam,status,len(pos),len(regimes),len(indep),len(toks),statistics.median(exps) if exps else None,min(exps) if exps else None,
      statistics.median(pfs) if pfs else None,min(pfs) if pfs else None,statistics.median(wins) if wins else None,
      statistics.median(lifts) if lifts else None,statistics.median(hits) if hits else None,maxov,rep,core.canonical_json(evidence),now))
