@@ -49,7 +49,6 @@ def init():
     ''');d.commit();d.close()
 
 def classify(x,r,a,token,cutoff,val,now):
-    # FIRST-SEEN FEATURE IS THE IMMUTABLE SIGNAL DECISION.
     if float(r['direction'])*float(val)<float(r['threshold']):return {'state':'NO_SIGNAL'}
     f=x.execute('SELECT price_sol,timestamp FROM v52_swaps WHERE token_mint=? AND timestamp>? AND price_sol>0 ORDER BY timestamp LIMIT 1',(token,cutoff)).fetchone()
     deadline=cutoff+float(a['fill_window_s'])
@@ -102,7 +101,7 @@ def main():
             q=classify(x,r,a,str(z['token_mint']),float(z['cutoff_ts']),float(z['feature_value']),now)
             o.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(r['rule_id'],z['token_mint'],z['cutoff_ts'],z['feature_value'],q['state'],q.get('fill_price'),q.get('fill_ts'),q.get('fill_delay_s'),q.get('path_points'),q.get('raw_return'),q.get('net_return'),q.get('hit'),q.get('exit_reason'),q.get('mfe'),q.get('mae'),now))
         summarize(o,r,int(a['confirm_done']));new_done=o.execute('SELECT done FROM summary WHERE rule_id=?',(r['rule_id'],)).fetchone()[0]
-        o.execute('INSERT INTO repair_audit VALUES(?,?,?,?,?,?,?)',(r['rule_id'],r['family'],len(old),invalid,old_done,new_done,old_done-new_done,time.time()))
+        o.execute('INSERT INTO repair_audit VALUES(?,?,?,?,?,?,?,?)',(r['rule_id'],r['family'],len(old),invalid,old_done,new_done,old_done-new_done,time.time()))
     o.commit()
     print('='*150);print('MEMECOIN LAB — V7.4.2.1 LOCKED FIRST-SEEN FEATURE REPAIR');print('='*150)
     print(f"arena={a['arena_id']} common_cutoff>{a['common_cutoff']:.3f} | ORIGINAL DB UNTOUCHED | repaired={OUT.name}\n")
