@@ -54,9 +54,12 @@ def init():
  if not d.execute('SELECT 1 FROM v71_freeze LIMIT 1').fetchone():
   r=dict(d.execute('SELECT * FROM v64_frozen_rule LIMIT 1').fetchone())
   w=dict(d.execute("SELECT * FROM v672_frozen_challengers WHERE family='WALLET_STRUCTURE' LIMIT 1").fetchone())
-  # common cutoff is frozen NOW; old outcomes cannot validate this portfolio experiment
   cut=max_cutoff();now=time.time();aid='P71_'+core.fingerprint({'cutoff':cut,'r64':r['rule_id'],'wallet':w['challenger_id']},'v71:')[:22]
-  d.execute('INSERT INTO v71_freeze VALUES(?,?,?,?,?,?,?,?)',(aid,now,cut,core.canonical_json(r),core.canonical_json(w),.5,.5,.75,.25))
+  d.execute('''INSERT INTO v71_freeze(
+    arena_id,frozen_at,frozen_cutoff,r64_rule_json,wallet_rule_json,
+    primary_r64_weight,primary_wallet_weight,secondary_r64_weight,secondary_wallet_weight)
+    VALUES(?,?,?,?,?,?,?,?,?)''',
+    (aid,now,cut,core.canonical_json(r),core.canonical_json(w),.5,.5,.75,.25))
  d.commit();d.close()
 
 def freeze():
@@ -86,7 +89,6 @@ def corr(a,b):
  return sum((x-ma)*(y-mb) for x,y in zip(a,b))/math.sqrt(sa*sb) if sa>0 and sb>0 else None
 def portfolio(fr,name,wr,ww):
  d=core.open_research();rs=[dict(x) for x in d.execute("SELECT label,token_mint,cutoff_ts,net_return FROM v71_events WHERE arena_id=? AND state='DONE' AND net_return IS NOT NULL ORDER BY cutoff_ts,token_mint",(fr['arena_id'],))];d.close()
- # bucket by token + integer signal second: same market opportunity is combined; isolated signals keep their own contribution
  buckets={}
  for x in rs:buckets.setdefault((x['token_mint'],int(float(x['cutoff_ts']))),{})[x['label']]=float(x['net_return'])
  vals=[];pairs=[];bothloss=0
@@ -100,7 +102,7 @@ def display(fr):
  d=core.open_research();s=[dict(x) for x in d.execute('SELECT * FROM v71_summary WHERE arena_id=? ORDER BY label',(fr['arena_id'],))];p=[dict(x) for x in d.execute('SELECT * FROM v71_portfolio_summary WHERE arena_id=? ORDER BY allocation',(fr['arena_id'],))];d.close();print('\033[2J\033[H',end='');print('='*176);print('MEMECOIN LAB — R64 + WALLET FUTURE-ONLY PORTFOLIO ARENA V7.1');print('='*176);print(f"arena={fr['arena_id']} common_cutoff>{fr['frozen_cutoff']:.3f} | PRIMARY=50/50 equal-risk | SECONDARY=75/25 sensitivity\n")
  for x in s:print(f"{x['label']:<8} {x['status']:<14} DONE={x['done']:>3} exp={sf(x['expectancy'],0):+6.2f}% PF={sf(x['pf'],0):.2f} fill={100*sf(x['fill_rate'],0):5.1f}% DD={sf(x['max_drawdown'],0):+7.2f}")
  print()
- for x in p:print(f"PORTFOLIO {x['allocation']:<10} {x['status']:<8} events={x['active_events']:>3} paired={x['paired_buckets']:>3} exp={sf(x['expectancy'],0):+6.2f}% PF={sf(x['pf'],0):.2f} DD={sf(x['max_drawdown'],0):+7.2f} loss_overlap={100*sf(x['loss_overlap_rate'],0):4.1f}% corr={sf(x['return_correlation'],0):+.2f}")
+ for x in p:print(f"PORTFOLIO {x['allocation']:<16} {x['status']:<8} events={x['active_events']:>3} paired={x['paired_buckets']:>3} exp={sf(x['expectancy'],0):+6.2f}% PF={sf(x['pf'],0):.2f} DD={sf(x['max_drawdown'],0):+7.2f} loss_overlap={100*sf(x['loss_overlap_rate'],0):4.1f}% corr={sf(x['return_correlation'],0):+.2f}")
  print('\nGuardrail: new common future-only cohort only. 50/50 is the predeclared primary test; 75/25 cannot be selected post hoc as the winner.')
 def cycle():
  fr=freeze();process_rule(fr,'R64',fr['r64']);process_rule(fr,'WALLET',fr['wallet']);summarize(fr,'R64');summarize(fr,'WALLET');portfolio(fr,'PRIMARY_50_50',.5,.5);portfolio(fr,'SECONDARY_75_25',.75,.25);display(fr)
