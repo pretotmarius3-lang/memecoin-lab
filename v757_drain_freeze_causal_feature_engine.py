@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""MEMECOIN LAB — DRAIN-THEN-FREEZE CAUSAL FEATURE ENGINE V7.5.7
+"""MEMECOIN LAB — DRAIN-THEN-FREEZE CAUSAL FEATURE ENGINE V7.5.7.1
 
-Fixes the V7.5.5 startup contamination bug.
+Fixes two startup-contamination failure modes:
 
-V7.5.5 froze eligibility from the newest decoded chain timestamp. If the decoder
-had been stopped for a while, raw rows already stored before engine start could
-be decoded afterwards and incorrectly look "post activation". Those old rows
-then generated 100s+ build_lag snapshots.
+1) old raw rows decoded after feature-engine start could look post-activation;
+2) waiting for *total* raw_pending==0 created a moving-target barrier because
+   fresh acquisition keeps adding rows while the decoder drains.
 
-V7.5.7 has an explicit warmup barrier:
-  1) decode/drain all pre-existing raw backlog WITHOUT creating causal evidence;
-  2) require raw_pending==0 for several consecutive checks;
-  3) freeze activation by WALL-CLOCK observed_at;
-  4) only tokens whose real first v52_swaps.observed_at is after that freeze may
-     ever enter the insert-only causal rail.
+V7.5.7.1 therefore freezes a STARTUP RAW WATERMARK at process start. Only raw
+rows already present at that instant belong to the drain barrier. Fresh rows may
+continue arriving and may even be decoded during warmup, but they do not prevent
+the barrier from completing. When all startup-watermark rows are processed for
+several consecutive checks, a second wall-clock activation freeze is taken.
+Only tokens whose true first decoded swap observed_at is strictly after that
+activation freeze can ever enter the insert-only causal rail.
 
 No legacy feature rebuild is performed in the hot loop. Research only.
 """
@@ -37,6 +37,7 @@ DRAIN_ZERO_STREAK=int(os.environ.get('MEMECOIN_V757_DRAIN_ZERO_STREAK','3'))
 STAGES=tuple(sorted(set(old.SNAPSHOTS)))
 STOP=False
 STARTED_AT=0.0
+STARTUP_RAW_CUTOFF=None
 ACTIVATION_OBSERVED_AT=None
 ACTIVATION_CHAIN_CUTOFF=None
 
@@ -70,14 +71,27 @@ def init_schema():
    recent_p90_lag REAL, recent_p95_lag REAL, note TEXT);
  '''); d.commit(); d.close()
 
-def raw_pending():
+def freeze_startup_raw_cutoff():
+ """Highest raw STORE timestamp already present when this process starts."""
+ if not V5.exists(): return time.time()
+ r=sqlite3.connect(f'file:{V5}?mode=ro',uri=True,timeout=30)
+ try:
+  z=r.execute('SELECT MAX(observed_at) FROM v5_raw_transactions').fetchone()[0]
+  return float(z) if z is not None else time.time()
+ finally:r.close()
+
+def pending_counts():
+ """Return (total_unprocessed, startup_watermark_unprocessed)."""
  try:
   d=db(); d.execute('ATTACH DATABASE ? AS raw',(str(V5),))
-  n=d.execute('''SELECT COUNT(*) FROM raw.v5_raw_transactions r
-                 LEFT JOIN main.v52_processed p ON p.signature=r.signature
-                 WHERE p.signature IS NULL''').fetchone()[0]
-  d.close(); return int(n)
- except Exception:return -1
+  total=d.execute('''SELECT COUNT(*) FROM raw.v5_raw_transactions r
+                     LEFT JOIN main.v52_processed p ON p.signature=r.signature
+                     WHERE p.signature IS NULL''').fetchone()[0]
+  oldn=d.execute('''SELECT COUNT(*) FROM raw.v5_raw_transactions r
+                    LEFT JOIN main.v52_processed p ON p.signature=r.signature
+                    WHERE p.signature IS NULL AND r.observed_at<=?''',(float(STARTUP_RAW_CUTOFF),)).fetchone()[0]
+  d.close(); return int(total),int(oldn)
+ except Exception:return -1,-1
 
 def persist_state(phase,decoded_rows,decoded_swaps,causal,rp,n=0,p50=None,p90=None,p95=None,note=''):
  d=db(); now=time.time(); d.execute('''INSERT OR REPLACE INTO v757_engine_state
@@ -103,7 +117,6 @@ def insert_token(d,mint,now):
  real=d.execute('SELECT MIN(timestamp),MIN(observed_at) FROM v52_swaps WHERE token_mint=?',(mint,)).fetchone()
  if not real or real[0] is None or real[1] is None:return 0
  first=float(real[0]); first_obs=float(real[1])
- # Critical invariant: token must have first become visible only after freeze.
  if ACTIVATION_OBSERVED_AT is None or first_obs<=ACTIVATION_OBSERVED_AT:return 0
  rows=d.execute('SELECT * FROM v52_swaps WHERE token_mint=? ORDER BY timestamp',(mint,)).fetchall()
  if not rows:return 0
@@ -154,26 +167,30 @@ def recent_lags():
  return len(xs),pct(xs,.5),pct(xs,.9),pct(xs,.95)
 
 def main():
- global STARTED_AT
+ global STARTED_AT,STARTUP_RAW_CUTOFF
  signal.signal(signal.SIGINT,stop); signal.signal(signal.SIGTERM,stop)
- init_schema(); canon.persist_activation_watermark(); STARTED_AT=time.time()
+ init_schema(); canon.persist_activation_watermark(); STARTED_AT=time.time(); STARTUP_RAW_CUTOFF=freeze_startup_raw_cutoff()
+ # A prior aborted V757 run never produced valid evidence while DRAINING. Keep the
+ # existing causal table only if it is empty; otherwise require an explicit audit.
+ d=db(); existing=d.execute('SELECT COUNT(*) FROM v757_causal_snapshots').fetchone()[0]; d.close()
+ if existing: raise RuntimeError(f'v757 causal table already has {existing} rows; do not mix runs')
  decoded_rows=decoded_swaps=causal=0; zero_streak=0; phase='DRAINING'; last_sched=last_health=0.0
- print('MEMECOIN LAB V7.5.7 DRAIN-THEN-FREEZE CAUSAL FEATURE ENGINE',flush=True)
- print('phase=DRAINING_PREEXISTING_RAW | causal evidence DISABLED until backlog is zero',flush=True)
+ print('MEMECOIN LAB V7.5.7.1 WATERMARK-DRAIN CAUSAL FEATURE ENGINE',flush=True)
+ print(f'phase=DRAINING_STARTUP_WATERMARK | startup_raw_observed_at<={STARTUP_RAW_CUTOFF:.3f} | causal evidence DISABLED',flush=True)
  while not STOP:
   try:
-   n,sw,q,c=canon.decode_batch(); decoded_rows+=n; decoded_swaps+=sw; now=time.time(); rp=raw_pending()
+   n,sw,q,c=canon.decode_batch(); decoded_rows+=n; decoded_swaps+=sw; now=time.time(); rp,startup_pending=pending_counts()
    if phase=='DRAINING':
-    zero_streak=zero_streak+1 if rp==0 else 0
+    zero_streak=zero_streak+1 if startup_pending==0 else 0
     if zero_streak>=DRAIN_ZERO_STREAK:
      freeze_after_drain(); phase='LIVE_CAUSAL'
-     print(f'V757 FREEZE | observed_at>{ACTIVATION_OBSERVED_AT:.3f} chain_cutoff>{ACTIVATION_CHAIN_CUTOFF:.3f} | pre-freeze rows quarantined from causal rail',flush=True)
+     print(f'V757 FREEZE | observed_at>{ACTIVATION_OBSERVED_AT:.3f} chain_cutoff>{ACTIVATION_CHAIN_CUTOFF:.3f} | startup backlog quarantined; fresh flow no longer blocks freeze',flush=True)
    elif now-last_sched>=SCHED_EVERY:
     causal+=schedule(); last_sched=now
    if now-last_health>=HEALTH_EVERY:
     rn,p50,p90,p95=recent_lags() if phase=='LIVE_CAUSAL' else (0,None,None,None)
-    persist_state(phase,decoded_rows,decoded_swaps,causal,rp,rn,p50,p90,p95,'observed_at activation; no pre-freeze causal backfill')
-    print(f'V757 phase={phase} decoded={decoded_rows} swaps={decoded_swaps} raw_pending={rp} | causal={causal} recent20/30 n={rn} lag p50/p90/p95={p50}/{p90}/{p95}',flush=True)
+    persist_state(phase,decoded_rows,decoded_swaps,causal,rp,rn,p50,p90,p95,f'startup_pending={startup_pending}; startup_raw_cutoff={STARTUP_RAW_CUTOFF}')
+    print(f'V757 phase={phase} decoded={decoded_rows} swaps={decoded_swaps} raw_pending={rp} startup_pending={startup_pending} | causal={causal} recent20/30 n={rn} lag p50/p90/p95={p50}/{p90}/{p95}',flush=True)
     last_health=now
   except Exception as e:
    print('V757 error:',repr(e),flush=True); time.sleep(.2)
