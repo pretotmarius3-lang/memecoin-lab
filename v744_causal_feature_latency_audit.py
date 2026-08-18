@@ -68,6 +68,7 @@ def init():
 def main():
     if not ARENA.exists():raise SystemExit(f'Missing {ARENA}')
     if not V52.exists():raise SystemExit(f'Missing {V52}')
+    init()
     a=ro(ARENA);v=ro(V52);o=odb()
     ar=a.execute('SELECT * FROM arena LIMIT 1').fetchone()
     if not ar:raise SystemExit('V7423 arena row missing')
@@ -82,8 +83,6 @@ def main():
         lags=[max(0.0,float(e['first_observed_at'])-float(e['cutoff_ts'])) for e in ev]
         feature_ok=sum(int(e['feature_available'])==1 for e in ev);feature_null=len(ev)-feature_ok
         late=sum(e['state']=='LATE_SNAPSHOT' for e in ev);signals=sum(int(e.get('signal_decision') or 0)==1 for e in ev);done=sum(e['state']=='DONE' for e in ev)
-        # Measure raw swap transport/decoder latency around each token's stage. Use swaps whose exchange timestamp is <= cutoff,
-        # because those are the inputs from which the stage feature can causally be constructed.
         transport=[];samples=[]
         for e in ev:
             sw=v.execute('''SELECT timestamp,observed_at FROM v52_swaps WHERE token_mint=? AND timestamp<=? AND observed_at IS NOT NULL ORDER BY timestamp DESC LIMIT 1''',(e['token_mint'],e['cutoff_ts'])).fetchone()
