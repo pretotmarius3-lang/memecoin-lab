@@ -10,10 +10,12 @@ Main fixes:
 - aggregate WSOL deltas across all wallet-owned WSOL accounts;
 - preserve native SOL fallback;
 - quarantine isolated price spikes prospectively before they enter v52_swaps when they are wildly
-  inconsistent with the token's recent canonical prices.
+  inconsistent with the token's recent canonical prices;
+- persist a durable activation watermark in v52_state. On upgrade of an already-running V5.2.2,
+  bootstrap that watermark from the earliest PRICE_QUARANTINE row when available.
 """
 from __future__ import annotations
-import math, os, signal, sqlite3, time
+import json, math, os, signal, sqlite3, time
 from pathlib import Path
 import v52_decode_features as old
 import v521_fast_decoder_features as fast
@@ -45,7 +47,6 @@ def canonical_swap(payload,row):
  mint=non[0];keys=old.account_keys(tx);signers={k["pubkey"] for k in keys if k["signer"]}
  owners={d.get("owner") for d in ds if d.get("mint")==mint and d.get("owner") and abs(float(d.get("delta") or 0))>0}
  signer_owners=owners & signers
- # Prefer a signer; otherwise choose owner with largest NET mint delta across all of its token accounts.
  pool=signer_owners or owners
  if not pool:return None,"no_owner_delta"
  sums={o:sum(float(d["delta"]) for d in ds if d.get("mint")==mint and d.get("owner")==o) for o in pool}
@@ -70,6 +71,21 @@ def gate(db,sw):
  if ratio>PRICE_GATE_RATIO:
   return False,f"price_quarantine ratio={ratio:.3f} ref={ref:.12g} price={sw['price_sol']:.12g}"
  return True,None
+
+def persist_activation_watermark():
+ db=old.open_feature()
+ try:
+  r=db.execute("SELECT value FROM v52_state WHERE key='v522_started_at'").fetchone()
+  if r:
+   try:return float(json.loads(r[0]).get('ts'))
+   except Exception:pass
+  # Existing V5.2.2 instance upgrade: earliest quarantine is a conservative durable marker
+  # that can only have been created by V5.2.2.
+  q=db.execute("SELECT MIN(processed_at) FROM v52_processed WHERE status='PRICE_QUARANTINE'").fetchone()
+  ts=float(q[0]) if q and q[0] is not None else time.time()
+  old.state(db,'v522_started_at',{'ts':ts,'source':'earliest_price_quarantine' if q and q[0] is not None else 'process_start','engine':'v522'})
+  db.commit();return ts
+ finally:db.close()
 
 def decode_batch():
  db=old.open_feature();rows=fast.fetch_new(db)
@@ -102,7 +118,7 @@ def decode_batch():
  return len(rows),dec,quar,changed
 
 def main():
- signal.signal(signal.SIGINT,stop);signal.signal(signal.SIGTERM,stop);old.initialize();last=0;changed=set();print(f"V5.2.2 CANONICAL PRICE DECODER | gate={PRICE_GATE_RATIO}x lookback={PRICE_GATE_LOOKBACK}",flush=True)
+ signal.signal(signal.SIGINT,stop);signal.signal(signal.SIGTERM,stop);old.initialize();wm=persist_activation_watermark();last=0;changed=set();print(f"V5.2.2 CANONICAL PRICE DECODER | gate={PRICE_GATE_RATIO}x lookback={PRICE_GATE_LOOKBACK} | watermark={wm:.3f}",flush=True)
  while not STOP:
   n,d,q,c=decode_batch();changed|=c
   if changed or time.time()-last>=1:
