@@ -149,13 +149,13 @@ def main():
         if shown>=8:break
 
     print('\nQUALITY GATE')
-    if disagreement==0 and new_cpi>=50 and status['PDA_ABSENT']==0:
+    if disagree==0 and new_cpi>=50 and status['PDA_ABSENT']==0:
         print('STATUS=CPI_PDA_INVARIANT_VALIDATION_STRONG')
         print('Next: freeze this evidence rule and build a separate canonical migration table; then reconstruct PRE/MIGRATION/POST.')
-    elif disagreement==0 and new_cpi>=30:
+    elif disagree==0 and new_cpi>=30:
         print('STATUS=CPI_PDA_INVARIANT_VALIDATION_USABLE')
         print('Next: canonicalize only candidates that pass BOTH unique-prehistory and bonding-curve-PDA presence; retain failures unresolved.')
-    elif disagreement==0 and len(valid)>0:
+    elif disagree==0 and len(valid)>0:
         print('STATUS=CPI_PDA_INVARIANT_VALIDATION_PARTIAL')
         print('Next: inspect PDA-absent cases / account loading, but do not weaken the invariant.')
     else:
