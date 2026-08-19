@@ -1,39 +1,18 @@
 #!/usr/bin/env python3
 """MEMECOIN LAB — PREREGISTERED FUTURE REGIME VALIDATOR V7.6.5.6
 
-Purpose
--------
-Stop re-mining the same discovery cohort. This script freezes the *structure* of
-one hypothesis now, then evaluates only observations whose T+30 decision time is
-after a one-time validator cutoff:
-
-  HYPOTHESIS: when the causal rolling prior-slope regime is LOW, tokens whose
-  current return_slope is >= the causal rolling Q70 threshold outperform the
-  rest over the later causal horizon.
-
-Important
----------
-- Validation only; no live trading, no capital decision.
-- One-time cutoff persisted in its own DB.
-- Regime proxy and Q70 threshold are computed only from observations available
-  before each tested token.
-- Historical rows may be used only as causal context for the rolling state, never
-  as validation outcomes after the cutoff.
-- The rule definition is fixed in code. Do not retune after seeing future rows.
+Future-only validator for the fixed hypothesis:
+LOW rolling prior-slope regime AND current return_slope >= rolling Q70.
+Historical rows are rolling context only, never validation outcomes.
 """
 from __future__ import annotations
-import math, os, sqlite3, statistics, time
+import math, sqlite3, statistics, time
 from pathlib import Path
 
 ROOT=Path.home()/"memecoin_lab"
 FEATURE=ROOT/'v52_features.db'
 OUT=ROOT/'v7656_future_regime_validation.db'
-MIN_HISTORY=20
-ROLL=20
-Q=0.70
-TARGET_LOW=20
-TARGET_HIGH=10
-
+MIN_HISTORY=20; ROLL=20; Q=0.70; TARGET_LOW=20; TARGET_HIGH=10
 
 def ro():
  d=sqlite3.connect(f'file:{FEATURE}?mode=ro',uri=True,timeout=30);d.row_factory=sqlite3.Row
@@ -66,15 +45,14 @@ def init():
  r=d.execute('SELECT * FROM run WHERE id=1').fetchone()
  if not r:
   x=ro();a=x.execute('SELECT activation_observed_at FROM v7611_scheduler_state WHERE id=1').fetchone();activation=sf(a[0]) if a else None
-  z=x.execute('''SELECT MAX(first_ts+30) FROM v7611_causal_snapshots WHERE stage_s=30 AND first_observed_at>?''',(activation or 0,)).fetchone();x.close()
+  z=x.execute('SELECT MAX(first_ts+30) FROM v7611_causal_snapshots WHERE stage_s=30 AND first_observed_at>?',(activation or 0,)).fetchone();x.close()
   cut=sf(z[0]) if z and z[0] is not None else time.time()
   d.execute('INSERT INTO run VALUES(?,?,?,?,?,?,?,?,?)',(1,time.time(),cut,activation,'LOW rolling prior-slope regime AND current slope >= rolling Q70',ROLL,Q,TARGET_LOW,TARGET_HIGH));d.commit()
  d.close()
 
 def samples():
  x=ro();a=x.execute('SELECT activation_observed_at FROM v7611_scheduler_state WHERE id=1').fetchone();activation=sf(a[0]) if a else None
- rows=x.execute('''SELECT token_mint,stage_s,first_ts,return_pct FROM v7611_causal_snapshots
- WHERE first_observed_at>? ORDER BY first_ts,token_mint,stage_s''',(activation or 0,)).fetchall();x.close()
+ rows=x.execute('SELECT token_mint,stage_s,first_ts,return_pct FROM v7611_causal_snapshots WHERE first_observed_at>? ORDER BY first_ts,token_mint,stage_s',(activation or 0,)).fetchall();x.close()
  by={}
  for r in rows:by.setdefault(str(r['token_mint']),{})[int(r['stage_s'])]=dict(r)
  out=[]
@@ -90,13 +68,11 @@ def samples():
  out.sort(key=lambda z:(z['t30'],z['mint']));return out
 
 def enrich_all(ss):
- enriched=[];reg_hist=[]
+ enriched=[]
  for i,z in enumerate(ss):
   hist=ss[max(0,i-ROLL):i]
   if len(hist)<MIN_HISTORY:continue
-  prior=[h['slope'] for h in hist]
-  regime=med(prior);slope_th=qv(prior,Q)
-  # Causal regime threshold: median of prior rolling-regime values only.
+  prior=[h['slope'] for h in hist];regime=med(prior);slope_th=qv(prior,Q)
   prior_regs=[]
   for j in range(MIN_HISTORY,i):
    hh=ss[max(0,j-ROLL):j]
@@ -110,7 +86,8 @@ def ingest():
  made=0
  for z in enrich_all(samples()):
   if z['t30']<=cut or z['future'] is None or z['mint'] in known:continue
-  d.execute('INSERT OR IGNORE INTO future_obs VALUES(?,?,?,?,?,?,?,?,?,?)',(z['mint'],z['t30'],z['slope'],z['regime'],z['regime_cut'],z['slope_th'],z['low'],z['high'],z['future'],time.time()));made+=d.execute('SELECT changes()').fetchone()[0]
+  d.execute('INSERT OR IGNORE INTO future_obs VALUES(?,?,?,?,?,?,?,?,?,?)',(z['mint'],z['t30'],z['slope'],z['regime'],z['regime_cut'],z['slope_th'],z['low'],z['high'],z['future'],time.time()))
+  made+=d.execute('SELECT changes()').fetchone()[0]
  d.commit();d.close();return made
 
 def stats(xs):
@@ -120,8 +97,11 @@ def stats(xs):
 
 def display():
  d=odb();r=d.execute('SELECT * FROM run WHERE id=1').fetchone();rows=[dict(z) for z in d.execute('SELECT * FROM future_obs ORDER BY t30,token_mint').fetchall()];d.close()
- low=[z for z in rows if z['low']==1];lh=[z['future'] for z in low if z['high']==1];lr=[z['future'] for z in low if z['high']==0]
- highreg=[z for z in rows if z['low']==0]
+ # IMPORTANT: DB columns are low_regime/high_slope. The old display used low/high and crashed once rows existed.
+ low=[z for z in rows if int(z['low_regime'])==1]
+ lh=[z['future'] for z in low if int(z['high_slope'])==1]
+ lr=[z['future'] for z in low if int(z['high_slope'])==0]
+ highreg=[z for z in rows if int(z['low_regime'])==0]
  print('='*132);print('MEMECOIN LAB — PREREGISTERED FUTURE REGIME VALIDATOR V7.6.5.6');print('='*132)
  print(f"cutoff_t30>{float(r['cutoff_t30']):.3f} total_future={len(rows)} LOW={len(low)} HIGH_REGIME={len(highreg)} | rule FIXED: LOW regime + rolling Q70 slope")
  print('Historical discovery outcomes are not included. Future observations only. No capital decision.')
@@ -132,11 +112,11 @@ def display():
   print(f' REST mean/med/capped/hit={b[0]:+8.2f}/{b[1]:+8.2f}/{b[2]:+8.2f}/{100*b[3]:5.1f}%')
   print(f' SPREAD mean/med/capped={(a[0]-b[0]):+8.2f}/{(a[1]-b[1]):+8.2f}/{(a[2]-b[2]):+8.2f}%')
  enough=len(low)>=int(r['target_low']) and len(lh)>=int(r['target_high']) and len(lr)>=int(r['target_high'])
- if not enough: print('\nSTATUS=ACCUMULATING_FUTURE_EVIDENCE')
+ if not enough:print('\nSTATUS=ACCUMULATING_FUTURE_EVIDENCE')
  else:
   a=stats(lh);b=stats(lr);passed=(a[1]>b[1] and a[2]>b[2] and a[3]>=b[3])
   print(f'\nSTATUS={"FUTURE_SIGNAL_SURVIVES" if passed else "FUTURE_SIGNAL_FAILS"}')
-  print('Gate is intentionally simple and preregistered: median + capped mean + hit-rate must not deteriorate versus rest.')
+  print('Gate: median + capped mean + hit-rate must not deteriorate versus rest.')
 
 def main():
  init();made=ingest();print(f'new_future_rows={made}');display()
